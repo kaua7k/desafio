@@ -1,84 +1,57 @@
-name: senai_automacao
-run-name: ${{ github.actor }} Pipeline Deploy 🚀
-on: 
+name: CI/CD Pipeline
+
+on:
   push:
     branches:
-      - "main"
-    paths-ignore:
-      - "docs/**"
-      - "images/**"
-      - "*.md"
-      - "*.dockerignore"
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
 jobs:
-  githubactions-senai:
+  build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v3
 
-      - name: INSTALL PACKAGES
-        run: |
-          sudo apt update -y
-          sudo apt-get install figlet -y
-          curl https://static.snyk.io/cli/latest/snyk-linux -o snyk
-          chmod +x ./snyk
-          mv ./snyk /usr/local/bin/
-            
-      - name: Snyk Auth
-        run: |
-          snyk -d auth $SNYK_TOKEN
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_AUTH_TOKEN }}
-          
-      - name: Configurar AWS CLI
-        if: always()
-        run: |
-          echo "AWS CLI" | figlet -f small
-          aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
-          aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
-          aws configure set default.region us-east-1
-          export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
-          export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
-          export AWS_DEFAULT_REGION="us-east-1"
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    - name: Set up Python
+      uses: actions/setup-python@v3
+      with:
+        python-version: '3.9'
 
-      - name: DockerLint (CI)
-        run: |
-          echo "DOCKERLINT" | figlet -f small
-          docker run --rm -i hadolint/hadolint < Dockerfile || true
-      
-      - name: Docker Login
-        if: always()
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.DOCKER_USER }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-      
-      - name: Docker build (CI)
-        if: always()
-        run: |
-          echo $AWS_ACCESS_KEY_ID
-          docker build --build-arg AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID --build-arg AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY --build-arg AWS_DEFAULT_REGION="us-east-1" -t apicontainer .
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          
-      - name: Docker Analysis (CI)
-        if: always()
-        run: |
-          echo "VULNERABILIDADES" | figlet -c -f small
-          snyk container test apicontainer:latest || true
-          
-      - name: Docker Push (CD)
-        if: always()
-        run: |
-          COMMIT_SHA=$(echo $GITHUB_SHA | cut -c 1-5)
-          echo $COMMIT_SHA
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 pytest
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-          docker tag apicontainer:latest <kaua7k>/apicontainer:$COMMIT_SHA
-          docker push <kaua7k>/apicontainer:$COMMIT_SHA
+    - name: Lint with flake8
+      run: |
+        # stop the build if there are Python syntax errors or undefined names
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
-      - run: echo "🍏 This job's status is ${{ job.status }}."
+    - name: Scan for security vulnerabilities
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'python:3.9-slim'
+        format: 'table'
+        exit-code: '1'
+        ignore-unfixed: true
+
+    - name: Build Docker image
+      run: docker build . -t ${{ secrets.DOCKER_USERNAME }}/my-app:${{ github.sha }}
+
+    - name: Login to DockerHub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Push to DockerHub
+      run: docker push ${{ secrets.DOCKER_USERNAME }}/my-app:${{ github.sha }}
