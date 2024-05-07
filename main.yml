@@ -1,4 +1,4 @@
-name: senai_automacao1
+name: senai_automacao
 run-name: ${{ github.actor }} Pipeline deploy
 on:
   push:
